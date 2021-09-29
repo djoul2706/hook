@@ -5,22 +5,29 @@ import (
     "fmt"
     log "github.com/sirupsen/logrus"
     kafka "github.com/segmentio/kafka-go"
+    "github.com/segmentio/kafka-go/sasl/plain"
+    //"github.com/segmentio/kafka-go/compress"
     "context"
     "flag"
     "os"
     "net/http"
     "time"
     "io/ioutil"
+    "crypto/tls"
+    "crypto/x509"
     //"encoding/json"
 )
 
 /* Globals variables */
-
 var (
     topicName = flag.String("topic", "default-topic", "topic name")
     brokerList = flag.String("brokers", "localhost:9092", "bootstrap URL")
     listenAddr = flag.String("listen", "localhost:4000", "ip:port to bind service")
+    saslUsername = flag.String("username", "", "kafka sasl username")
+    saslPassword = flag.String("password", "", "kafka sasl password")
+    caPath = flag.String("capath", "", "ca path")
     validate = flag.Bool("validate", false, "if set a msg will be sent to topic at start")
+    tlsConfig *tls.Config
 )
 
 func init() {
@@ -30,17 +37,43 @@ func init() {
     log.SetLevel(log.DebugLevel)
 }
 
-func getKafkaWriter(kafkaURL, topic string) *kafka.Writer {
-	return &kafka.Writer{
-		Addr:     kafka.TCP(kafkaURL),
-		Topic:    topic,
-		//Balancer: &kafka.LeastBytes{}, default balancer is round-robin distribution
-		RequiredAcks: kafka.RequireAll,
-		MaxAttempts: 30,    // default 30
-		BatchSize:  100,    // default 100
-		BatchTimeout:   time.Duration(100)*time.Millisecond, // equals linger.ms, set to 100ms
-		Compression:    kafka.Snappy,
-	}
+func buildKafkaConfig() *kafka.WriterConfig {
+    mechanism := plain.Mechanism{
+            Username: *saslUsername,
+            Password: *saslPassword,
+        }
+    if *caPath != "" {
+        certs, _ := x509.SystemCertPool()
+        data, err := ioutil.ReadFile(*caPath)
+        if err != nil {
+            log.Fatal(err)
+            }
+        ok := certs.AppendCertsFromPEM(data)
+        if !ok {
+            log.Fatal(err)
+            }
+        tlsConfig = &tls.Config{
+            			ClientCAs:          certs,
+            			InsecureSkipVerify: false,
+            		}
+    }
+    dialer := &kafka.Dialer{
+            Timeout:   10 * time.Second,
+            DualStack: true,
+            TLS:       tlsConfig,
+            SASLMechanism: mechanism,
+        }
+    return &kafka.WriterConfig{
+        Brokers: []string{*brokerList},
+        Topic:   *topicName,
+        //Balancer: &kafka.Hash{},
+        Dialer:   dialer,
+        RequiredAcks: -1,
+        MaxAttempts: 30,    // default 30
+        BatchSize:  100,    // default 100
+        BatchTimeout:   time.Duration(100)*time.Millisecond, // equals linger.ms, set to 100ms
+        //kafka.Snappy,
+    }
 }
 
 func formatRecord(byteData []byte, key string) kafka.Message {
@@ -62,7 +95,12 @@ func sendRecord(msg kafka.Message, kafkaWriter *kafka.Writer) error {
 }
 
 func main() {
-    kafkaWriter := getKafkaWriter(*brokerList, *topicName)
+
+    kafkaConfig := buildKafkaConfig()
+    kafkaWriter := kafka.NewWriter(*kafkaConfig)
+
+    // getKafkaWriter(*brokerList, *topicName)
+
     log.Info(fmt.Sprint("Producer created for ", *brokerList, *topicName))
     defer kafkaWriter.Close()
 
