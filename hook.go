@@ -56,6 +56,7 @@ func LoadConfig(path string) (config Config, err error){
 type Config struct {
     Server struct {
         Bind string `yaml:"bind"`
+        Validate string `yaml:"validate"`
     } `yaml:"server"`
     Kafka struct {
         Username string `yaml:"username"`
