@@ -6,6 +6,7 @@ import (
     log "github.com/sirupsen/logrus"
     kafka "github.com/segmentio/kafka-go"
     "github.com/segmentio/kafka-go/sasl/plain"
+    "github.com/spf13/viper"
     //"github.com/segmentio/kafka-go/compress"
     "context"
     "flag"
@@ -23,11 +24,12 @@ var (
     topicName = flag.String("topic", "default-topic", "topic name")
     brokerList = flag.String("brokers", "localhost:9092", "bootstrap URL")
     listenAddr = flag.String("listen", "localhost:4000", "ip:port to bind service")
-    saslUsername = flag.String("username", "", "kafka sasl username")
-    saslPassword = flag.String("password", "", "kafka sasl password")
-    caPath = flag.String("capath", "", "ca path")
+    saslUsername = flag.String("username", "username", "kafka sasl username")
+    saslPassword = flag.String("password", "password", "kafka sasl password")
+    caPath = flag.String("capath", "/tmp/capath", "ca path")
     validate = flag.Bool("validate", false, "if set a msg will be sent to topic at start")
     tlsConfig *tls.Config
+    mechanism *plain.Mechanism
 )
 
 func init() {
@@ -37,11 +39,40 @@ func init() {
     log.SetLevel(log.DebugLevel)
 }
 
+func LoadConfig(path string) (config Config, err error){
+    viper.SetConfigName("config") // config file name
+    viper.SetConfigType("yaml")
+    viper.AddConfigPath(path)
+    viper.SetEnvPrefix("hook")
+    viper.AutomaticEnv()
+    err = viper.ReadInConfig()
+    if err != nil {
+        return config, err
+    }
+    err = viper.Unmarshal(&config)
+    return
+}
+
+type Config struct {
+    Server struct {
+        Bind string `yaml:"bind"`
+    } `yaml:"server"`
+    Kafka struct {
+        Username string `yaml:"username"`
+        Password string `yaml:"password"`
+        Topic string `yaml:"topic"`
+        Brokers string `yaml:"brokers"`
+        Tls struct {
+            CaPath string `yaml:"capath"`
+            } `yaml:"tls"`
+    } `yaml:"kafka"`
+}
+
 func buildKafkaConfig() *kafka.WriterConfig {
     mechanism := plain.Mechanism{
-            Username: *saslUsername,
-            Password: *saslPassword,
-        }
+                Username: *saslUsername,
+                Password: *saslPassword,
+            }
     if *caPath != "" {
         certs, _ := x509.SystemCertPool()
         data, err := ioutil.ReadFile(*caPath)
@@ -95,6 +126,12 @@ func sendRecord(msg kafka.Message, kafkaWriter *kafka.Writer) error {
 }
 
 func main() {
+    config, err := LoadConfig(".")
+    if err != nil {
+        log.Fatal(err)
+        }
+    log.Info(fmt.Sprint(config.Server.Bind))
+    log.Info(fmt.Sprint(config.Kafka.Tls.CaPath))
 
     kafkaConfig := buildKafkaConfig()
     kafkaWriter := kafka.NewWriter(*kafkaConfig)
